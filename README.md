@@ -41,4 +41,5 @@ P80: Control PWM Servomotoare  Nucleu 1
 P75: Detecție YOLO             Nucleu 1
 P50: ROS 2 Middleware          Nucleu 0
 ```
+<img width="1220" height="795" alt="image" src="https://github.com/user-attachments/assets/7804b242-13bb-4cf3-8e83-629972862c23" />
 
