@@ -1,0 +1,16 @@
+[Unit]
+Description=Lidar 3D Scanner Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/mihai/FAN_CONTROL/serviciu_final
+ExecStart=/bin/bash /home/mihai/FAN_CONTROL/serviciu_final/start_system.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
