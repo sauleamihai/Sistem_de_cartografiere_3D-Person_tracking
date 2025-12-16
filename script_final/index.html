@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiDAR V5 Performance Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Courier New', monospace; background: #000; color: #0f0; overflow: hidden; }
+        
+        #info-panel {
+            position: absolute; top: 10px; left: 10px;
+            background: rgba(0, 0, 0, 0.85); padding: 15px;
+            border: 2px solid #0f0; border-radius: 5px;
+            min-width: 320px; z-index: 1000;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        }
+        #info-panel h2 { color: #0ff; margin-bottom: 10px; font-size: 18px; text-transform: uppercase; letter-spacing: 2px; }
+        .info-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #333; }
+        .info-label { color: #888; font-size: 12px; }
+        .info-value { color: #0f0; font-weight: bold; font-size: 14px; }
+        
+        .temp-value { padding: 2px 8px; border-radius: 3px; font-weight: bold; }
+        .temp-normal { color: #0f0; background: rgba(0, 255, 0, 0.1); }
+        .temp-warm { color: #ff0; background: rgba(255, 255, 0, 0.1); }
+        .temp-hot { color: #f80; background: rgba(255, 128, 0, 0.1); }
+        .temp-critical { color: #f00; background: rgba(255, 0, 0, 0.2); animation: blink 1s infinite; }
+        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.3; } }
+        
+        .fan-indicator { display: inline-block; width: 100px; height: 12px; background: #222; border: 1px solid #444; border-radius: 3px; overflow: hidden; position: relative; }
+        .fan-bar { height: 100%; background: linear-gradient(90deg, #0f0, #0ff); transition: width 0.3s ease; }
+        
+        .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .status-connected { background: #0f0; }
+        .status-scanning { background: #0ff; }
+        .status-error { background: #f00; }
+        
+        #controls { position: absolute; bottom: 10px; left: 10px; background: rgba(0, 0, 0, 0.85); padding: 10px; border: 2px solid #0f0; border-radius: 5px; z-index: 1000; }
+        button { background: #0f0; color: #000; border: none; padding: 8px 16px; margin: 5px; cursor: pointer; font-family: 'Courier New', monospace; font-weight: bold; border-radius: 3px; transition: all 0.2s; }
+        button:hover { background: #0ff; box-shadow: 0 0 10px rgba(0, 255, 255, 0.5); }
+        button:active { transform: scale(0.95); }
+        
+        label { display: block; margin: 5px; color: #0f0; font-size: 12px; cursor: pointer; }
+        input[type="checkbox"] { margin-right: 5px; }
+        
+        #stats { position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.85); padding: 10px; border: 2px solid #0f0; border-radius: 5px; font-size: 11px; min-width: 150px; }
+        
+        #memory-warning { color: #f80; display: none; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="info-panel">
+        <h2>🛰️ LiDAR V5 Performance</h2>
+        <div class="info-row"><span class="info-label">Status:</span><span class="info-value"><span class="status-indicator status-connected" id="status-led"></span><span id="status">Connecting...</span></span></div>
+        <div class="info-row"><span class="info-label">Total Points:</span><span class="info-value" id="point-count">0</span></div>
+        <div class="info-row"><span class="info-label">Chunks (Active):</span><span class="info-value" id="chunk-count">1</span></div>
+        <div class="info-row"><span class="info-label">Position:</span><span class="info-value" id="position">---</span></div>
+        <div class="info-row" id="memory-warning"><span class="info-label">AUTO-PRUNING:</span><span class="info-value">ON</span></div>
+        <hr style="margin: 10px 0; border-color: #333;">
+        <div style="margin-top: 10px;">
+            <div class="info-row"><span class="info-label">🌡️ Temp 1:</span><span class="info-value"><span class="temp-value temp-normal" id="temp1">--°C</span></span></div>
+            <div class="info-row"><span class="info-label">🌡️ Temp 2:</span><span class="info-value"><span class="temp-value temp-normal" id="temp2">--°C</span></span></div>
+            <div class="info-row"><span class="info-label">🌀 Fan 1:</span><span class="info-value"><div class="fan-indicator"><div class="fan-bar" id="fan1-bar" style="width: 0%"></div></div> <span id="fan1-value">0%</span></span></div>
+            <div class="info-row"><span class="info-label">🌀 Fan 2:</span><span class="info-value"><div class="fan-indicator"><div class="fan-bar" id="fan2-bar" style="width: 0%"></div></div> <span id="fan2-value">0%</span></span></div>
+        </div>
+    </div>
+    
+    <div id="stats">
+        <div>FPS: <span id="fps">0</span></div>
+        <div>Packets/s: <span id="pps">0</span></div>
+        <div>Pruned Points: <span id="pruned-count">0</span></div>
+    </div>
+    
+    <div id="controls">
+        <button onclick="resetView()">🔄 Reset View</button>
+        <button onclick="manager.clearAll()">🗑️ Clear All</button>
+        <label><input type="checkbox" id="perf-mode" checked onchange="manager.togglePruning(this.checked)"> Performance Mode (Max 10M)</label>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <script>
+        // ==================== 3D Scene Setup ====================
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+        scene.fog = new THREE.Fog(0x000000, 1000, 15000); 
+        
+        const axesHelper = new THREE.AxesHelper(500);
+        scene.add(axesHelper);
+        const gridHelper = new THREE.GridHelper(2000, 20, 0x00ff00, 0x003300);
+        scene.add(gridHelper);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 50000);
+        camera.position.set(2000, 2000, 2000);
+        camera.lookAt(0, 0, 0);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+        
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxDistance = 20000;
+
+        // ==================== SMART CHUNK MANAGER ====================
+        class PointCloudManager {
+            constructor(scene, maxPointsPerChunk = 500000) {
+                this.scene = scene;
+                this.maxPointsPerChunk = maxPointsPerChunk;
+                this.chunks = [];
+                this.activeChunk = null;
+                this.totalPoints = 0;
+                this.prunedPoints = 0;
+                
+                // Limits
+                this.MAX_TOTAL_POINTS = 10000000; // 10 Million Limit (Prevent Lag)
+                this.autoPrune = true;
+                
+                // Smart Filter: Spatial Quantization (2mm Grid)
+                this.gridSize = 2.0; 
+                this.lastX = 0; this.lastY = 0; this.lastZ = 0;
+                
+                this.createNewChunk();
+            }
+
+            togglePruning(enabled) {
+                this.autoPrune = enabled;
+                document.getElementById('memory-warning').style.display = enabled ? 'flex' : 'none';
+                if (enabled) this.pruneOldChunks();
+            }
+
+            createNewChunk() {
+                // Freeze previous chunk for performance
+                if (this.activeChunk) {
+                    this.activeChunk.geometry.attributes.position.needsUpdate = true;
+                    this.activeChunk.geometry.attributes.color.needsUpdate = true;
+                    // Mark as static so GPU optimizes it
+                    this.activeChunk.geometry.attributes.position.usage = THREE.StaticDrawUsage;
+                    this.activeChunk.geometry.attributes.color.usage = THREE.StaticDrawUsage;
+                }
+
+                const geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(this.maxPointsPerChunk * 3);
+                const colors = new Float32Array(this.maxPointsPerChunk * 3);
+                
+                // Use DynamicDraw for the active chunk being written to
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+                
+                // Manual bounding sphere to avoid recalculation overhead
+                geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0,0,0), 50000); 
+                
+                const material = new THREE.PointsMaterial({ size: 3, vertexColors: true, sizeAttenuation: true });
+                const points = new THREE.Points(geometry, material);
+                points.frustumCulled = false; // Keep false while writing
+                
+                this.scene.add(points);
+                this.chunks.push(points);
+                
+                this.activeChunk = {
+                    mesh: points,
+                    geometry: geometry,
+                    positions: positions,
+                    colors: colors,
+                    index: 0
+                };
+                
+                document.getElementById('chunk-count').textContent = this.chunks.length;
+            }
+
+            addPoints(pointArray) {
+                let chunk = this.activeChunk;
+                let added = 0;
+
+                for (const p of pointArray) {
+                    // --- SMART FILTER: Spatial Quantization ---
+                    // Snaps points to a 2mm grid. Reduces redundancy significantly.
+                    // Instead of storing 123.456, we store 124.0. 
+                    // Visual diff is negligible, but duplicate points are filtered.
+                    const qx = Math.round(p.x / this.gridSize) * this.gridSize;
+                    const qy = Math.round(p.y / this.gridSize) * this.gridSize;
+                    const qz = Math.round(p.z / this.gridSize) * this.gridSize;
+                    
+                    if (qx === this.lastX && qy === this.lastY && qz === this.lastZ) continue;
+                    
+                    this.lastX = qx; this.lastY = qy; this.lastZ = qz;
+                    // ------------------------------------------
+
+                    if (chunk.index >= this.maxPointsPerChunk) {
+                        this.createNewChunk();
+                        chunk = this.activeChunk;
+                        // Enable frustum culling on the finished chunk to save GPU when looking away
+                        this.chunks[this.chunks.length-2].frustumCulled = true; 
+                    }
+
+                    const idx = chunk.index * 3;
+                    
+                    // Coordinates: Z-up (Lidar) -> Y-up (Three.js)
+                    chunk.positions[idx] = p.x;
+                    chunk.positions[idx+1] = p.z;
+                    chunk.positions[idx+2] = -p.y;
+                    
+                    chunk.colors[idx] = p.r / 255;
+                    chunk.colors[idx+1] = p.g / 255;
+                    chunk.colors[idx+2] = p.b / 255;
+                    
+                    chunk.index++;
+                    added++;
+                }
+                
+                this.totalPoints += added;
+                
+                // Efficient partial update
+                if (added > 0) {
+                    chunk.geometry.setDrawRange(0, chunk.index);
+                    chunk.geometry.attributes.position.needsUpdate = true;
+                    chunk.geometry.attributes.color.needsUpdate = true;
+                    
+                    // Tell Three.js exactly which part of the buffer changed
+                    const start = (chunk.index - added) * 3;
+                    const end = chunk.index * 3;
+                    chunk.geometry.attributes.position.updateRange = { offset: start, count: added * 3 };
+                    chunk.geometry.attributes.color.updateRange = { offset: start, count: added * 3 };
+                }
+                
+                if (this.autoPrune) this.pruneOldChunks();
+            }
+
+            pruneOldChunks() {
+                // If we exceed the limit, remove the OLDEST chunk
+                while (this.totalPoints > this.MAX_TOTAL_POINTS && this.chunks.length > 1) {
+                    const oldChunk = this.chunks.shift(); // Remove first element
+                    this.scene.remove(oldChunk);
+                    
+                    // Clean up GPU memory
+                    oldChunk.geometry.dispose();
+                    oldChunk.material.dispose();
+                    
+                    // Update counters
+                    const pointsRemoved = oldChunk.geometry.drawRange.count; // Usually maxPointsPerChunk
+                    this.totalPoints -= pointsRemoved;
+                    this.prunedPoints += pointsRemoved;
+                }
+                
+                document.getElementById('point-count').textContent = this.totalPoints.toLocaleString();
+                document.getElementById('chunk-count').textContent = this.chunks.length;
+                document.getElementById('pruned-count').textContent = this.prunedPoints.toLocaleString();
+            }
+
+            clearAll() {
+                this.chunks.forEach(c => {
+                    this.scene.remove(c);
+                    c.geometry.dispose();
+                    c.material.dispose();
+                });
+                this.chunks = [];
+                this.totalPoints = 0;
+                this.prunedPoints = 0;
+                this.createNewChunk();
+                document.getElementById('point-count').textContent = '0';
+                document.getElementById('pruned-count').textContent = '0';
+            }
+        }
+
+        const manager = new PointCloudManager(scene, 500000); // 500k chunks for smoother pruning
+
+        // ==================== WebSocket ====================
+        const ws = new WebSocket('ws://localhost:8080');
+        let packetsReceived = 0;
+        let lastPacketTime = Date.now();
+        let fps = 0, frameCount = 0, lastFpsUpdate = Date.now();
+        
+        ws.onopen = () => { updateStatus('Connected', 'connected'); };
+        ws.onclose = () => { updateStatus('Disconnected', 'error'); };
+        
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if(msg.type === 'points') {
+                    manager.addPoints(msg.data);
+                    packetsReceived++;
+                } else if(msg.type === 'status') {
+                    handleStatus(msg.msg);
+                } else if(msg.type === 'telemetry') {
+                    handleTelemetry(msg);
+                }
+            } catch (e) {}
+        };
+        
+        function handleStatus(msg) {
+            if (msg.startsWith('ROLL:') || msg.startsWith('PITCH:')) {
+                document.getElementById('position').textContent = msg;
+                updateStatus('Scanning', 'scanning');
+            } else if (msg === 'DONE') {
+                updateStatus('Scan Complete', 'connected');
+                document.getElementById('position').textContent = 'Home';
+            } else if (msg === 'STARTED') {
+                updateStatus('Scanning Started', 'scanning');
+            } else if (msg.startsWith('CRITICAL')) {
+                updateStatus('⚠️ CRITICAL TEMP!', 'error');
+            }
+        }
+        
+        function handleTelemetry(data) {
+            updateTemperature('temp1', data.temp1);
+            updateTemperature('temp2', data.temp2);
+            const f1 = (data.fan1 !== undefined) ? data.fan1 : (data.fan1_speed || 0);
+            const f2 = (data.fan2 !== undefined) ? data.fan2 : (data.fan2_speed || 0);
+            updateFan('fan1', f1);
+            updateFan('fan2', f2);
+        }
+        
+        // ==================== UI Updates ====================
+        function updateStatus(message, state) {
+            const statusEl = document.getElementById('status');
+            const ledEl = document.getElementById('status-led');
+            statusEl.textContent = message;
+            ledEl.className = 'status-indicator ' + (state === 'connected' ? 'status-connected' : state === 'scanning' ? 'status-scanning' : 'status-error');
+        }
+        
+        function updateTemperature(elementId, temp) {
+            const el = document.getElementById(elementId);
+            el.textContent = `${temp.toFixed(1)}°C`;
+            el.className = 'temp-value ' + (temp < 35 ? 'temp-normal' : temp < 45 ? 'temp-warm' : temp < 55 ? 'temp-hot' : 'temp-critical');
+        }
+        
+        function updateFan(fanId, speed) {
+            document.getElementById(`${fanId}-bar`).style.width = `${speed}%`;
+            document.getElementById(`${fanId}-value`).textContent = `${speed}%`;
+        }
+        
+        function updateStats() {
+            const now = Date.now();
+            const elapsed = (now - lastPacketTime) / 1000;
+            if (elapsed > 0) document.getElementById('pps').textContent = Math.round(packetsReceived / elapsed);
+            
+            const fpsElapsed = (now - lastFpsUpdate) / 1000;
+            if (fpsElapsed >= 1.0) {
+                document.getElementById('fps').textContent = Math.round(frameCount / fpsElapsed);
+                frameCount = 0; lastFpsUpdate = now; packetsReceived = 0; lastPacketTime = now;
+            }
+        }
+        
+        function resetView() {
+            camera.position.set(2000, 2000, 2000);
+            camera.lookAt(0, 0, 0);
+            controls.reset();
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+            frameCount++;
+            updateStats();
+        }
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        animate();
+    </script>
+</body>
+</html>
